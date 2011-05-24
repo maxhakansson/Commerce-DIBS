@@ -1,0 +1,491 @@
+<?php
+
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_dibs_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['commerce_dibs'] = array(
+    'base' => 'commerce_dibs',
+    'title' => t('DIBS - Credit Card'),
+    'short_title' => t('DIBS CC'),
+    'display_title' => t('Credit card, DIBS'),
+    'description' => t('Integrates DIBS Flex Window Method.'),
+    'active' => TRUE,
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+  );
+
+  return $payment_methods;
+}
+
+
+/**
+ * Implementation of hook_theme().
+ */
+function commerce_dibs_theme() {
+  $themes = array();
+  $themes['commerce_dibs_accept_page'] = array(
+    'variables' => array(
+      'feedback' => NULL
+     ),
+    'template' => 'commerce-dibs-accept-page',
+  );
+
+  return $themes;
+}
+
+ /**
+ * Implementation of hook_menu().
+ */
+function commerce_dibs_menu() {
+  $items = array();
+
+  $items['dibs/accept'] = array(
+    'title' => 'DIBS payment accepted',
+    'description' => '',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'commerce_dibs_accept_page',
+    'access callback' => TRUE,
+  );
+
+  return $items;
+}
+
+
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_dibs_settings_form($settings = NULL) {
+  $form = array();
+
+  // Merge default settings into the stored settings array.
+  $default_currency = variable_get('commerce_default_currency', 'USD');
+  
+  $settings = (array) $settings + array(
+    'merchant' => '',
+    'account' => '',
+    'currency_code' => in_array($default_currency, array_keys(commerce_dibs_currencies())) ? $default_currency : 'USD',
+    'language' => 'sv',
+    'test_mode' => 1,
+    'payment_action' => 'sale',
+    'type' => 'flex',
+    'retry_handling' => 'unchanged',
+    'md5' => 1,
+    'md5_key1' => '',
+    'md5_key2' => '',
+    'orderid' => array(
+    					'order_id' => '',
+    					'order_id_prefix' => '',
+    					'order_id_suffix' => '',
+    					),
+  );
+
+
+  $form = array(
+    '#type' => 'fieldset',
+    '#title' => t('General settings'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+    '#tree' => TRUE,
+  );
+  $form['merchant'] = array(
+    '#type' => 'textfield',
+    '#title' => t('MertchantID'),
+    '#maxlength' => 30,
+    '#required' => TRUE,
+    '#default_value' => $settings['merchant'],
+    '#description' => t('DIBS MerchantID'),
+  );
+    $form['account'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Account'),
+    '#maxlength' => 64,
+    '#default_value' => $settings['account'],
+    '#description' => t('DIBS Account ID. Only used if the DIBS gateway is running multiple accounts.')
+  );
+  $form['test_mode'] = array(
+    '#type' => 'select',
+    '#title' => t('Test mode'),
+    '#options' => array('' => '', 0 => t('No'), 1 => t('Yes')),
+    '#default_value' => $settings['test_mode'],
+    '#description' => t('Is the gateway running in test mode'),
+  );
+  $form['currency_code'] = array(
+    '#type' => 'select',
+    '#title' => t('Currency'),
+    '#options' => commerce_dibs_currencies(),
+    '#required' => TRUE,
+    '#default_value' => array_keys(commerce_dibs_currencies(), $settings['currency_code']),
+    '#description' => t('Currency code for the currency used when paying.'),
+  );
+  $form['language'] = array(
+    '#type' => 'select',
+    '#title' => t('Language'),
+    '#options' => array(
+                        '' => '',
+                        'da' => 'Danish',
+                        'sv' => 'Swedish',
+                        'no' => 'Norwegian',
+                        'en' => 'English',
+                        'nl' => 'Dutch',
+                        'de' => 'German',
+                        'fr' => 'French',
+                        'fi' => 'Finnish',
+                        'es' => 'Spanish',
+                        'it' => 'Italian',
+                        'pl' => 'Polish'
+                      ),
+    '#required' => TRUE,
+    '#default_value' => $settings['language'],
+    '#description' => t('Language code for the language used on the DIBS payment window')
+  );
+  $form['type'] = array(
+    '#type' => 'select',
+    '#title' => t('Window type'),
+    '#required' => TRUE,
+    '#options' => array('' => '', 'pay' => t('Pay window'), 'flex' => t('Flex window')),
+    '#default_value' => $settings['type'],
+    '#description' => t('If Flex window, DIBS will make some extra checks on the sended data, to be sure that no one manipulated it. If enabled should the keys below be filled in!'),
+  );
+  $form['md5'] = array(
+    '#type' => 'select',
+    '#title' => t('Perform MD5 control'),
+    '#options' => array('' => '', 0 => t('No'), 1 => t('Yes')),
+    '#default_value' => $settings['md5'],
+    '#description' => t('If enabled, DIBS will make some extra checks on the sended data, to be sure that no one manipulated it. If enabled should the keys below be filled in!'),
+  );
+  $form['md5_key1'] = array(
+    '#type' => 'textfield',
+    '#title' => t('MD5 key 1'),
+    '#maxlength' => 64,
+    '#default_value' => $settings['md5_key1'],
+    '#description' => t('MD5 key 1 - used if "Perform MD5 control" is enabled.')
+  );
+  $form['md5_key2'] = array(
+    '#type' => 'textfield',
+    '#title' => t('MD5 key 2'),
+    '#maxlength' => 64,
+    '#default_value' => $settings['md5_key2'],
+    '#description' => t('MD5 key 2 - used if "Perform MD5 control" is enabled.')
+  );
+
+  return $form;
+}
+
+/**
+ * Validate settings form
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function commerce_dibs_settings_form_validate($form, &$form_state) {
+
+  // Checking if keys are filled in when MD5 check is enabled
+  if ($form_state['values']['md5'] == 1) {
+    if (empty($form_state['values']['md5_key1'])) {
+      form_set_error('md5_key1', t('Please, fill in the missing key, or disable "Perform MD5 control". The MD5 keys can be found in the DIBS administration.'));
+    }
+    if (empty($form_state['values']['md5_key2'])) {
+      form_set_error('md5_key2', t('Please, fill in the missing key, or disable "Perform MD5 control". The MD5 keys can be found in the DIBS administration.'));
+    }
+  }
+
+
+}
+
+/**
+ * Payment method callback: redirect form, a wrapper around the module's general
+ *   use function for building a DIBS form.
+ */
+function commerce_dibs_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['merchant'])) {
+    drupal_set_message(t('DIBS is not configured for use. No Merchant ID has been specified.'), 'error');
+    return array();
+  }
+
+  $settings = array(
+    // Return to the previous page when payment is canceled
+    'cancel_return' => url('checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Callback url for processing successful payments
+    'callback' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+
+    // Accept url for processing successful payments
+    'return' => url('dibs/accept', array('absolute' => TRUE)),
+
+    // Specify the current payment method instance ID in the notify_url
+    'payment_method' => $payment_method['instance_id'],
+  );
+
+  return commerce_dibs_order_form($form, $form_state, $order, $payment_method['settings'] + $settings);
+}
+
+
+/**
+ * Builds a Website Payments Standard form from an order object.
+ *
+ * @param $order
+ *   The fully loaded order being paid for.
+ * @param $settings
+ *   An array of settings used to build out the form, including:
+ *   - merchant: the merchant id
+ *   - amount: the amount to be charged
+ *   - currency: the DIBS currency code to use for this payment
+ *   - lang: the DIBS language code to use on the payment form
+ *   - orderid: the order ID that commerce generated
+ *   - accepturl: the URL DIBS should send the user to on successful payment
+ *   - cancel_return: the URL DIBS should send the user to on cancellation
+ *   - callbackurl: the URL DIBS makes it's callback to as soon as the payment is accepted
+ *   - HTTP_COOKIE: the cookie that is mandatory if callbackurl is used
+ *   - ordertext: a text that will show up in the DIBS administration
+ *
+ * @return
+ *   A renderable form array.
+ */
+function commerce_dibs_order_form($form, &$form_state, $order, $settings) {
+  $wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+  $currency_code = $wrapper->commerce_order_total->currency_code->value();
+  $amount = $wrapper->commerce_order_total->amount->value();
+  
+  
+  // Ensure a default value for the payment_method setting.
+  $settings += array('payment_method' => '');
+
+  // Build the data array that will be translated into hidden form values.
+  $data = array(
+
+	// Creating form fields
+	// Required fields
+	'merchant' => $settings['merchant'],
+	'amount' => $amount,
+	'currency' => in_array($currency_code, array_keys(commerce_dibs_currencies())) ? commerce_dibs_get_currency_code($currency_code) : commerce_dibs_get_currency_code($settings['currency_code']),
+	'lang' => $settings['language'],
+	'orderid' => $order->order_number,
+	'accepturl' => $settings['return'],
+	'callbackurl' => $settings['callback'],
+	'cancelurl' => $settings['cancel_return'],
+	'HTTP_COOKIE' => getenv("HTTP_COOKIE"),
+	
+
+	// Define a single item in the cart representing the whole order
+	// TODO: create individual order lines for each product
+	'ordertext' => t('Order @order_number at @store', array('@order_number' => $order->order_number, '@store' => variable_get('site_name', url('<front>', array('absolute' => TRUE))))),
+
+  );
+  
+  	// Optional fields
+	if (!empty($settings['test_mode'])) {
+		$data['test'] = 1;
+	}
+    if (!empty($settings['account'])) {
+    	$data['account'] = $settings['account'];
+    }
+    if (!empty($settings['md5'])) {
+    	$md5_key = md5($settings['md5_key2'] . md5($settings['md5_key1'] . 'merchant=' . $settings['merchant'] . '&orderid=' . $order->order_number . '&currency=' . commerce_dibs_get_currency_code($settings['currency_code']) . '&amount=' . $amount));
+		$data['md5key'] = $md5_key;
+	}
+	
+	// Payment Window fields
+	if ($settings['type'] == 'pay') {
+    	if (!empty($settings['paymentwindow']['color'])) {
+      		$data['color'] = $settings['paymentwindow']['color'];
+      	}
+    }
+	// Flex Window fields
+	elseif ($settings['type'] == 'flex') {
+		if (!empty($settings['flexwindow']['color'])) {
+			$data['color'] = $settings['flexwindow']['color'];
+		}
+		if (!empty($settings['flexwindow']['decorator']) && ($settings['flexwindow']['decorator'] != 'custom')) {
+			$data['decorator'] = $settings['flexwindow']['decorator'];
+		}
+    	else {
+			$data['decorator'] = '';
+		}
+		if (!empty($settings['flexwindow']['voucher'])) {
+			$data['voucher'] = $settings['flexwindow']['voucher'] ? 'yes' : '';
+		}
+	}
+
+  $form['#action'] = commerce_dibs_server_url($settings['type']);
+
+  
+  // Translate the $data array to hidden form values in $form
+  foreach ($data as $name => $value) {
+    if (!empty($value)) {
+      $form[$name] = array('#type' => 'hidden', '#value' => $value);
+    }
+  }
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to DIBS'),
+  );
+  
+  return $form;
+}
+
+
+/**
+ * Payment method callback: checkout form validation.
+ */
+function commerce_dibs_redirect_form_validate($order, $payment_method) {
+
+
+  watchdog('commerce_dibs', 'Callback returned from DIBS with the following POST data:<pre>' . check_plain(print_r($_POST, TRUE)) . '</pre>', array(), WATCHDOG_NOTICE);
+  
+
+  if (isset($_REQUEST['transact'])) {
+
+    $feedback = array();
+    $feedback = array_map('check_plain', $_REQUEST);
+    $feedback = array_change_key_case($feedback, CASE_UPPER);
+
+    $wrapper = entity_metadata_wrapper('commerce_order', $order);
+	$currency_code = commerce_dibs_get_currency_code($wrapper->commerce_order_total->currency_code->value());
+	$amount = $wrapper->commerce_order_total->amount->value() * 100;
+	$transact = $_REQUEST['transact'];
+	$cookie = $_REQUEST['HTTP_COOKIE'];
+	
+    $authkey = isset($_REQUEST['authkey']) ? $_REQUEST['authkey'] : '';
+    if (!empty($transact)) {
+      $md5_key = md5($payment_method['settings']['md5_key2'] . md5($payment_method['settings']['md5_key1'] . 'transact='. $transact .'&amount='. $amount .'&currency='. $currency_code));
+      if (($md5_key == $authkey) || empty($payment_method['settings']['md5'])) {
+      	if (getenv("HTTP_COOKIE") == $cookie || $payment_method['settings']['type'] == 'pay') {
+      	  commerce_dibs_process_transaction($order, $payment_method, $feedback);
+		  return TRUE;
+      	}
+      	else {
+      		watchdog('commerce_dibs', 'Cookie mismatch. The returned cookie is invalid.', array(), WATCHDOG_NOTICE);
+      		return FALSE;
+      	}
+		
+      }
+      else {
+      	watchdog('commerce_dibs', 'MD5 mismatch. The returned authkey is not valid.', array(), WATCHDOG_NOTICE);
+      	return FALSE;
+      }
+    }
+  }
+  else {
+  	watchdog('commerce_dibs', 'No transaction ID returned. Payment not accepted.', array(), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+  
+}
+
+
+/**
+ * Process the payment transaction with the info received from DIBS
+ *
+ * @param $order
+ *   The loaded order that is being processed
+ * @param $payment_method
+ *   The payment method settings
+ * @param $feedback
+ *   The parameters received from DIBS regarding the payment
+ */
+function commerce_dibs_process_transaction($order, $payment_method, $feedback) {
+
+ //debug
+  watchdog('commerce_dibs', 'feedback: ' . print_r($feedback) . '<br />payment_method: ' . print_r($payment_method) .  '<br />order: ' . print_r($order), array(), WATCHDOG_NOTICE);
+    
+  
+  $transaction = commerce_payment_transaction_new('commerce_dibs', $order->order_id);
+
+  // identifying data
+  $transaction->instance_id = $payment_method['instance_id'];
+  $transaction->remote_id = $feedback['TRANSACT'];
+  // payment amount details
+  $transaction->amount = $order->commerce_order_total[LANGUAGE_NONE][0]['amount'];
+  $transaction->currency_code = $order->commerce_order_total[LANGUAGE_NONE][0]['currency_code'];
+  // payment status
+  //$transaction->remote_status = $feedback['STATUS'];
+  $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+  $transaction->message = t('The payment has completed.');
+  commerce_payment_transaction_save($transaction);
+}
+
+/**
+ * Display confirmation on accepted payment
+ *
+ */
+function commerce_dibs_accept_page() {
+	$feedback = array();
+    $feedback = array_map('check_plain', $_REQUEST);
+	if (empty($feedback['transact'])) {
+		drupal_set_message(t('An error occured. The transaction key is not valid!'), 'error');
+		return '';
+	}
+	// Unsetting the temporary session
+	unset($_SESSION['commerce_dibs']);
+	
+
+	// Returning the themed output
+	return theme('commerce_dibs_accept_page', array('feedback'=>$feedback));
+}
+
+
+/**
+ * Returns the URL to the specified DIBS server.
+ *
+ * @param $server
+ *   Either test or live indicating which server to get the URL for.
+ *
+ * @return
+ *   The URL to use to submit requests to the DIBS server.
+ */
+function commerce_dibs_server_url($server) {
+  switch ($server) {
+    case 'pay':
+    	return 'https://pay.dibspayment.com/';
+    case 'flex':
+    	return 'https://payment.architrade.com/paymentweb/start.action';
+  }
+}
+/**
+ * Returns an array of all possible currencies.
+ */
+function commerce_dibs_currencies() {
+  return drupal_map_assoc(array('DKK', 'EUR', 'USD', 'GBP', 'SEK', 'AUD', 'CAD', 'ISK', 'JPY', 'NZD', 'NOK', 'CHF', 'TRY'));
+}
+/**
+ * Returns the translated value of the currency.
+ */
+function commerce_dibs_get_currency_code($currency) {
+  switch ($currency) {
+  	case 'DKK':
+  		return '208';
+  	case 'EUR':
+  		return '978';
+  	case 'USD':
+  		return '840';
+  	case 'GBP':
+  		return '826';
+  	case 'SEK':
+  		return '752';
+  	case 'AUD':
+  		return '036';
+  	case 'CAD':
+  		return '124';
+  	case 'ISK':
+  		return '352';
+  	case 'JPY':
+  		return '392';
+  	case 'NZD':
+  		return '554';
+  	case 'NOK':
+  		return '578';
+  	case 'CHF':
+  		return '756';
+  	case 'TRY':
+  		return '949';
+  }
+
+}
